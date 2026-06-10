@@ -62,6 +62,21 @@ import { createPdfViewerHtml } from '@/lib/pdf-viewer-html';
 import { requestChatAnswer, startChatStream, ChatMessageItem } from '@/lib/chat-api';
 import CitationInlineText, { type NormalizedCitation } from '@/components/workspace/CitationInlineText';
 import {
+  fetchSessionSummaries,
+  normalizeSummaryItems,
+  type SavedSummaryItem,
+  type SavedSummaryKind,
+} from '@/lib/summary-api';
+import {
+  fetchQuizDetail,
+  fetchSessionQuizzes,
+  getQuizQuestionKey,
+  getQuizQuestions,
+  submitQuizAnswers,
+  type QuizQuestion,
+  type SavedQuiz,
+} from '@/lib/quiz-api';
+import {
   appendMaterialToSessionWeeks,
   buildSessionSourceGroups,
   buildTranscriptLines,
@@ -2168,8 +2183,12 @@ export default function WorkspaceScreen() {
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.contentScroll}>
                 {activeTab === 'materials' && materialsPanel}
-                {activeTab === 'summary' && <SummaryPanel />}
-                {activeTab === 'quiz' && <QuizPanel />}
+                {activeTab === 'summary' && (
+                  <SummaryPanel sessionId={sessionId ?? ''} sessionTitle={sessionTitle} />
+                )}
+                {activeTab === 'quiz' && (
+                  <QuizPanel sessionId={sessionId ?? ''} sessionTitle={sessionTitle} />
+                )}
               </ScrollView>
             )}
 
@@ -3181,20 +3200,686 @@ function MaterialsPanel({
   );
 }
 
-function SummaryPanel() {
+type SavedPanelStatus = 'done' | 'error' | 'idle' | 'loading';
+type SummaryFilterKey = SavedSummaryKind | 'all';
+type QuizDetailStatus = SavedPanelStatus | 'submitting';
+type QuizResultState = {
+  correctCount: number;
+  score: number;
+  totalQuestions: number;
+};
+
+const summaryFilterOptions: { key: SummaryFilterKey; label: string }[] = [
+  { key: 'all', label: '전체' },
+  { key: 'recording', label: '전사' },
+  { key: 'material', label: 'PDF' },
+  { key: 'speaker', label: '화자' },
+  { key: 'session', label: '세션' },
+];
+
+function formatSavedDate(value?: string | null) {
+  if (!value) return '저장일 없음';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '저장일 없음';
+
+  return date.toLocaleString('ko-KR', {
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'long',
+  });
+}
+
+function getTextPreview(text: string, limit = 96) {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit).trim()}...` : normalized;
+}
+
+function splitReadableParagraphs(text: string) {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  return paragraphs.length ? paragraphs : [text.trim()].filter(Boolean);
+}
+
+type SummaryPanelProps = {
+  sessionId: string;
+  sessionTitle: string;
+};
+
+function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
+  const [summaryItems, setSummaryItems] = useState<SavedSummaryItem[]>([]);
+  const [summaryStatus, setSummaryStatus] = useState<SavedPanelStatus>('idle');
+  const [summaryError, setSummaryError] = useState('');
+  const [summaryFilter, setSummaryFilter] = useState<SummaryFilterKey>('all');
+  const [selectedSummaryId, setSelectedSummaryId] = useState('');
+
+  const loadSummaries = useCallback(async () => {
+    if (!sessionId) {
+      setSummaryItems([]);
+      setSelectedSummaryId('');
+      setSummaryStatus('done');
+      return;
+    }
+
+    setSummaryStatus('loading');
+    setSummaryError('');
+
+    try {
+      const records = await fetchSessionSummaries(sessionId);
+      const items = normalizeSummaryItems(records);
+      setSummaryItems(items);
+      setSelectedSummaryId((currentId) => (
+        items.some((item) => item.id === currentId) ? currentId : items[0]?.id ?? ''
+      ));
+      setSummaryStatus('done');
+    } catch (error) {
+      setSummaryError(error instanceof Error ? error.message : '요약 목록을 불러오지 못했습니다.');
+      setSummaryStatus('error');
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    loadSummaries();
+  }, [loadSummaries]);
+
+  const summaryCounts = useMemo(() => {
+    const counts: Record<SummaryFilterKey, number> = {
+      all: summaryItems.length,
+      material: 0,
+      recording: 0,
+      session: 0,
+      speaker: 0,
+    };
+
+    summaryItems.forEach((item) => {
+      counts[item.kind] += 1;
+    });
+
+    return counts;
+  }, [summaryItems]);
+
+  const filteredSummaryItems = useMemo(
+    () => summaryItems.filter((item) => summaryFilter === 'all' || item.kind === summaryFilter),
+    [summaryFilter, summaryItems],
+  );
+
+  const selectedSummary = useMemo(() => {
+    if (!filteredSummaryItems.length) return null;
+    return (
+      filteredSummaryItems.find((item) => item.id === selectedSummaryId) ??
+      filteredSummaryItems[0]
+    );
+  }, [filteredSummaryItems, selectedSummaryId]);
+
   return (
-    <View style={styles.placeholderPanel}>
-      <Text style={styles.contentTitle}>요약</Text>
-      <Text style={styles.contentSubtitle}>강의자료나 전사 데이터가 추가되면 요약을 만들 수 있습니다.</Text>
+    <View style={styles.savedPanel}>
+      <View style={styles.savedPanelHeader}>
+        <View style={styles.savedPanelTitleGroup}>
+          <Text style={styles.contentTitle}>요약</Text>
+          <Text style={styles.contentSubtitle}>{sessionTitle}</Text>
+        </View>
+
+        <Pressable
+          disabled={summaryStatus === 'loading'}
+          onPress={loadSummaries}
+          style={[styles.savedRefreshButton, summaryStatus === 'loading' && styles.savedRefreshButtonDisabled]}>
+          {summaryStatus === 'loading' ? (
+            <ActivityIndicator color="#636A78" size="small" />
+          ) : (
+            <MaterialIcons name="refresh" size={20} color="#303746" />
+          )}
+          <Text style={styles.savedRefreshText}>새로고침</Text>
+        </Pressable>
+      </View>
+
+      {summaryError ? (
+        <View style={styles.savedErrorBanner}>
+          <MaterialIcons name="error-outline" size={18} color="#B42318" />
+          <Text style={styles.savedErrorText}>{summaryError}</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.savedFilterRow}>
+        {summaryFilterOptions.map((option) => {
+          const isActive = summaryFilter === option.key;
+          const count = summaryCounts[option.key];
+
+          return (
+            <Pressable
+              key={option.key}
+              onPress={() => {
+                setSummaryFilter(option.key);
+                const nextItem = summaryItems.find((item) => option.key === 'all' || item.kind === option.key);
+                setSelectedSummaryId(nextItem?.id ?? '');
+              }}
+              style={[styles.savedFilterButton, isActive && styles.savedFilterButtonActive]}>
+              <Text style={[styles.savedFilterText, isActive && styles.savedFilterTextActive]}>
+                {option.label} {count}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {summaryStatus === 'loading' && !summaryItems.length ? (
+        <View style={styles.savedEmptyState}>
+          <ActivityIndicator color="#8E929A" size="small" />
+          <Text style={styles.savedEmptyTitle}>저장된 요약을 불러오는 중입니다.</Text>
+        </View>
+      ) : filteredSummaryItems.length ? (
+        <View style={styles.savedSplitLayout}>
+          <View style={styles.savedListColumn}>
+            {filteredSummaryItems.map((item) => {
+              const isActive = selectedSummary?.id === item.id;
+              const kindIconStyle =
+                item.kind === 'material'
+                  ? styles.summaryKindIcon_material
+                  : item.kind === 'speaker'
+                    ? styles.summaryKindIcon_speaker
+                    : item.kind === 'recording'
+                      ? styles.summaryKindIcon_recording
+                      : styles.summaryKindIcon_session;
+
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => setSelectedSummaryId(item.id)}
+                  style={[styles.savedListItem, isActive && styles.savedListItemActive]}>
+                  <View style={styles.savedListItemHeader}>
+                    <View style={[styles.savedKindIcon, kindIconStyle, isActive && styles.savedKindIconActive]}>
+                      <MaterialIcons
+                        name={item.kind === 'material' ? 'picture-as-pdf' : item.kind === 'speaker' ? 'record-voice-over' : 'article'}
+                        size={17}
+                        color={isActive ? '#FFFFFF' : '#5B6472'}
+                      />
+                    </View>
+                    <View style={styles.savedListItemTitleBlock}>
+                      <Text numberOfLines={1} style={styles.savedListItemTitle}>{item.title}</Text>
+                      <Text numberOfLines={1} style={styles.savedListItemMeta}>
+                        {item.subtitle} · {formatSavedDate(item.createdAt)}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text numberOfLines={2} style={styles.savedListItemPreview}>
+                    {getTextPreview(item.summary)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View style={styles.savedDetailPane}>
+            {selectedSummary ? (
+              <>
+                <View style={styles.savedDetailHeader}>
+                  <View>
+                    <Text style={styles.savedDetailTitle}>{selectedSummary.title}</Text>
+                    <Text style={styles.savedDetailMeta}>
+                      {selectedSummary.subtitle} · {formatSavedDate(selectedSummary.createdAt)}
+                    </Text>
+                  </View>
+                  <View style={styles.savedDetailPill}>
+                    <Text style={styles.savedDetailPillText}>
+                      {selectedSummary.kind === 'material'
+                        ? 'PDF'
+                        : selectedSummary.kind === 'speaker'
+                          ? '화자'
+                          : selectedSummary.kind === 'recording'
+                            ? '전사'
+                            : '세션'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.savedSummaryBody}>
+                  {splitReadableParagraphs(selectedSummary.summary).map((paragraph, index) => (
+                    <Text key={`${selectedSummary.id}-paragraph-${index}`} style={styles.savedSummaryParagraph}>
+                      {paragraph}
+                    </Text>
+                  ))}
+                </View>
+              </>
+            ) : null}
+          </View>
+        </View>
+      ) : (
+        <View style={styles.savedEmptyState}>
+          <MaterialIcons name="article" size={31} color="#A6ADB8" />
+          <Text style={styles.savedEmptyTitle}>저장된 요약이 없습니다.</Text>
+          <Text style={styles.savedEmptyText}>웹에서 생성되어 DB에 저장된 요약이 이곳에 표시됩니다.</Text>
+        </View>
+      )}
     </View>
   );
 }
 
-function QuizPanel() {
+type QuizPanelProps = {
+  sessionId: string;
+  sessionTitle: string;
+};
+
+function getQuizTypeLabel(type?: string | null) {
+  const normalized = String(type ?? '').toUpperCase();
+  if (normalized === 'MULTIPLE_CHOICE') return '객관식';
+  if (normalized === 'OX') return 'O/X';
+  return normalized || '문항';
+}
+
+function getQuizListTypeLabel(quiz: SavedQuiz) {
+  const multipleChoiceCount = quiz.type_counts?.MULTIPLE_CHOICE ?? 0;
+  const oxCount = quiz.type_counts?.OX ?? 0;
+  const parts = [
+    multipleChoiceCount > 0 ? `객관식 ${multipleChoiceCount}` : '',
+    oxCount > 0 ? `O/X ${oxCount}` : '',
+  ].filter(Boolean);
+
+  return parts.length ? parts.join(' · ') : '저장 퀴즈';
+}
+
+function getQuizTotalQuestions(quiz: SavedQuiz | null) {
+  return quiz?.total_questions ?? getQuizQuestions(quiz).length;
+}
+
+function isQuizAnswerCorrect(question: QuizQuestion, answer: string) {
+  if (typeof question.is_correct === 'boolean') return question.is_correct;
+  return String(question.correct_answer ?? '').trim() === answer.trim();
+}
+
+function QuizPanel({ sessionId, sessionTitle }: QuizPanelProps) {
+  const [quizList, setQuizList] = useState<SavedQuiz[]>([]);
+  const [activeQuiz, setActiveQuiz] = useState<SavedQuiz | null>(null);
+  const [quizListStatus, setQuizListStatus] = useState<SavedPanelStatus>('idle');
+  const [quizDetailStatus, setQuizDetailStatus] = useState<QuizDetailStatus>('idle');
+  const [quizError, setQuizError] = useState('');
+  const [loadingQuizId, setLoadingQuizId] = useState('');
+  const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({});
+  const [quizResult, setQuizResult] = useState<QuizResultState | null>(null);
+  const [activeQuestionPage, setActiveQuestionPage] = useState(0);
+
+  const applyQuizDetail = useCallback((quiz: SavedQuiz, page = 0) => {
+    const questions = getQuizQuestions(quiz);
+    const answers = questions.reduce<Record<string, string>>((result, question, index) => {
+      const userAnswer = typeof question.user_answer === 'string' ? question.user_answer : '';
+      if (userAnswer) {
+        result[getQuizQuestionKey(question, index)] = userAnswer;
+      }
+      return result;
+    }, {});
+    const totalQuestions = getQuizTotalQuestions(quiz) || questions.length;
+    const correctCount = typeof quiz.correct_count === 'number' ? quiz.correct_count : null;
+
+    setActiveQuiz({ ...quiz, quiz_data: questions });
+    setQuizAnswers(answers);
+    setQuizResult(
+      correctCount === null
+        ? null
+        : {
+            correctCount,
+            score: totalQuestions ? Math.round((correctCount / totalQuestions) * 1000) / 10 : 0,
+            totalQuestions,
+          },
+    );
+    setActiveQuestionPage(Math.min(page, Math.max(0, questions.length - 1)));
+  }, []);
+
+  const loadQuizDetail = useCallback(async (quizId: string, page = 0) => {
+    if (!quizId) return;
+
+    setLoadingQuizId(quizId);
+    setQuizDetailStatus('loading');
+    setQuizError('');
+
+    try {
+      const quiz = await fetchQuizDetail(quizId);
+      applyQuizDetail(quiz, page);
+      setQuizDetailStatus('done');
+    } catch (error) {
+      setQuizError(error instanceof Error ? error.message : '퀴즈를 불러오지 못했습니다.');
+      setQuizDetailStatus('error');
+    } finally {
+      setLoadingQuizId('');
+    }
+  }, [applyQuizDetail]);
+
+  const loadQuizList = useCallback(async () => {
+    if (!sessionId) {
+      setQuizList([]);
+      setActiveQuiz(null);
+      setQuizAnswers({});
+      setQuizResult(null);
+      setQuizListStatus('done');
+      return;
+    }
+
+    setQuizListStatus('loading');
+    setQuizError('');
+
+    try {
+      const quizzes = await fetchSessionQuizzes(sessionId);
+      setQuizList(quizzes);
+      setQuizListStatus('done');
+
+      if (quizzes[0]?.quiz_id) {
+        await loadQuizDetail(quizzes[0].quiz_id);
+      } else {
+        setActiveQuiz(null);
+        setQuizAnswers({});
+        setQuizResult(null);
+        setQuizDetailStatus('idle');
+      }
+    } catch (error) {
+      setQuizError(error instanceof Error ? error.message : '퀴즈 목록을 불러오지 못했습니다.');
+      setQuizListStatus('error');
+    }
+  }, [loadQuizDetail, sessionId]);
+
+  useEffect(() => {
+    loadQuizList();
+  }, [loadQuizList]);
+
+  const questions = useMemo(() => getQuizQuestions(activeQuiz), [activeQuiz]);
+  const currentQuestion = questions[activeQuestionPage] ?? null;
+  const currentQuestionKey = currentQuestion
+    ? getQuizQuestionKey(currentQuestion, activeQuestionPage)
+    : '';
+  const currentAnswer = currentQuestionKey ? quizAnswers[currentQuestionKey] ?? '' : '';
+  const answeredQuestionCount = useMemo(
+    () => questions.filter((question, index) => quizAnswers[getQuizQuestionKey(question, index)]).length,
+    [questions, quizAnswers],
+  );
+  const canSubmitQuiz =
+    Boolean(activeQuiz?.quiz_id) &&
+    questions.length > 0 &&
+    answeredQuestionCount === questions.length &&
+    !quizResult &&
+    quizDetailStatus !== 'submitting';
+
+  const setQuizAnswer = (question: QuizQuestion, index: number, answer: string) => {
+    if (quizResult) return;
+    setQuizAnswers((currentAnswers) => ({
+      ...currentAnswers,
+      [getQuizQuestionKey(question, index)]: answer,
+    }));
+  };
+
+  const submitAnswers = async () => {
+    if (!activeQuiz?.quiz_id || !canSubmitQuiz) return;
+
+    setQuizDetailStatus('submitting');
+    setQuizError('');
+
+    try {
+      const result = await submitQuizAnswers(activeQuiz.quiz_id, quizAnswers);
+      const nextQuiz: SavedQuiz = {
+        ...activeQuiz,
+        ...result,
+        correct_count: result.correct_count,
+        quiz_data: result.quiz_data,
+        total_questions: result.total_questions,
+      };
+
+      applyQuizDetail(nextQuiz, activeQuestionPage);
+      setQuizList((items) => items.map((item) => (
+        item.quiz_id === result.quiz_id
+          ? {
+              ...item,
+              correct_count: result.correct_count,
+              total_questions: result.total_questions,
+            }
+          : item
+      )));
+      setQuizResult({
+        correctCount: result.correct_count,
+        score: result.score,
+        totalQuestions: result.total_questions,
+      });
+      setQuizDetailStatus('done');
+    } catch (error) {
+      setQuizError(error instanceof Error ? error.message : '퀴즈 채점에 실패했습니다.');
+      setQuizDetailStatus('error');
+    }
+  };
+
+  const resetQuizAttempt = () => {
+    if (!activeQuiz) return;
+
+    const resetQuestions = questions.map((question) => ({
+      ...question,
+      is_correct: null,
+      user_answer: null,
+    }));
+
+    setActiveQuiz({
+      ...activeQuiz,
+      correct_count: null,
+      quiz_data: resetQuestions,
+    });
+    setQuizAnswers({});
+    setQuizResult(null);
+  };
+
+  const handleBackToList = () => {
+    setActiveQuiz(null);
+    setQuizAnswers({});
+    setQuizResult(null);
+    setActiveQuestionPage(0);
+  };
+
   return (
-    <View style={styles.placeholderPanel}>
-      <Text style={styles.contentTitle}>퀴즈</Text>
-      <Text style={styles.contentSubtitle}>자료를 추가하면 복습 퀴즈가 이곳에 표시됩니다.</Text>
+    <View style={styles.savedPanel}>
+      <View style={styles.savedPanelHeader}>
+        <View style={styles.savedPanelTitleGroup}>
+          <Text style={styles.contentTitle}>퀴즈</Text>
+          <Text style={styles.contentSubtitle}>{sessionTitle}</Text>
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {activeQuiz ? (
+            <Pressable onPress={handleBackToList} style={styles.savedRefreshButton}>
+              <MaterialIcons name="arrow-back" size={20} color="#303746" />
+              <Text style={styles.savedRefreshText}>목록으로</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            disabled={quizListStatus === 'loading'}
+            onPress={loadQuizList}
+            style={[styles.savedRefreshButton, quizListStatus === 'loading' && styles.savedRefreshButtonDisabled]}>
+            {quizListStatus === 'loading' ? (
+              <ActivityIndicator color="#636A78" size="small" />
+            ) : (
+              <MaterialIcons name="refresh" size={20} color="#303746" />
+            )}
+            <Text style={styles.savedRefreshText}>새로고침</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {quizError ? (
+        <View style={styles.savedErrorBanner}>
+          <MaterialIcons name="error-outline" size={18} color="#B42318" />
+          <Text style={styles.savedErrorText}>{quizError}</Text>
+        </View>
+      ) : null}
+
+      <ScrollView contentContainerStyle={styles.quizScrollContainer}>
+        {quizListStatus === 'loading' && !quizList.length ? (
+          <View style={styles.savedEmptyState}>
+            <ActivityIndicator color="#8E929A" size="small" />
+            <Text style={styles.savedEmptyTitle}>저장된 퀴즈를 불러오는 중입니다.</Text>
+          </View>
+        ) : !activeQuiz ? (
+          quizList.length > 0 ? (
+            <View style={styles.quizListContainer}>
+              {quizList.map((quiz) => {
+                const totalQuestions = getQuizTotalQuestions(quiz);
+                const correctCount = typeof quiz.correct_count === 'number' ? quiz.correct_count : null;
+
+                return (
+                  <View key={quiz.quiz_id} style={styles.quizListCard}>
+                    <View style={styles.quizListCardIcon}>
+                      {loadingQuizId === quiz.quiz_id ? (
+                        <ActivityIndicator color="#636A78" size="small" />
+                      ) : (
+                        <MaterialIcons name="assignment" size={20} color="#475569" />
+                      )}
+                    </View>
+                    <View style={styles.quizListCardContent}>
+                      <Text numberOfLines={1} style={styles.quizListCardTitle}>
+                        {quiz.source_title || '저장된 퀴즈'}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.quizListCardMeta}>
+                        {getQuizListTypeLabel(quiz)} · {formatSavedDate(quiz.created_at)} · {correctCount === null ? '미응시' : `${correctCount}/${totalQuestions} 정답`}
+                      </Text>
+                    </View>
+                    <View style={styles.quizListCardActions}>
+                      <Pressable 
+                        disabled={loadingQuizId === quiz.quiz_id}
+                        onPress={() => loadQuizDetail(quiz.quiz_id)} 
+                        style={styles.quizListCardButton}>
+                        <MaterialIcons name="play-arrow" size={18} color="#475569" />
+                        <Text style={styles.quizListCardButtonText}>
+                          {correctCount === null ? '풀기' : '다시 보기'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <View style={styles.savedEmptyState}>
+              <MaterialIcons name="quiz" size={31} color="#A6ADB8" />
+              <Text style={styles.savedEmptyTitle}>저장된 퀴즈가 없습니다.</Text>
+              <Text style={styles.savedEmptyText}>웹에서 생성되어 DB에 저장된 퀴즈가 이곳에 표시됩니다.</Text>
+            </View>
+          )
+        ) : quizDetailStatus === 'loading' ? (
+          <View style={styles.savedEmptyState}>
+            <ActivityIndicator color="#8E929A" size="small" />
+            <Text style={styles.savedEmptyTitle}>퀴즈 문항을 불러오는 중입니다.</Text>
+          </View>
+        ) : currentQuestion ? (
+          <View style={styles.quizDetailContainer}>
+            <View style={styles.quizDetailHeaderBox}>
+              <Text style={styles.quizDetailHeaderScore}>
+                {quizResult 
+                  ? `${Math.round(quizResult.score)}점 ` 
+                  : '퀴즈 진행 중 '}
+                <Text style={styles.quizDetailHeaderScoreSub}>
+                  {quizResult 
+                    ? `${quizResult.correctCount} / ${quizResult.totalQuestions} 정답` 
+                    : `${answeredQuestionCount} / ${questions.length} 응답`}
+                </Text>
+              </Text>
+              {quizResult ? (
+                <Pressable onPress={resetQuizAttempt} style={styles.quizDetailHeaderButton}>
+                  <Text style={styles.quizDetailHeaderButtonText}>다시 풀기</Text>
+                </Pressable>
+              ) : null}
+            </View>
+
+            <Text style={styles.quizDetailQuestionTitle}>
+              {activeQuestionPage + 1}. {currentQuestion.question || '문항 내용이 없습니다.'}
+            </Text>
+
+            <View style={styles.quizDetailOptions}>
+              {(currentQuestion.options ?? []).map((option, index) => {
+                const isSelected = currentAnswer === option;
+                const isCorrectOption = quizResult && option === currentQuestion.correct_answer;
+                const isWrongSelected = quizResult && isSelected && option !== currentQuestion.correct_answer;
+
+                return (
+                  <Pressable
+                    key={`${currentQuestionKey}-${option}`}
+                    disabled={Boolean(quizResult)}
+                    onPress={() => setQuizAnswer(currentQuestion, activeQuestionPage, option)}
+                    style={[
+                      styles.quizDetailOptionButton,
+                      isSelected && !quizResult && styles.quizDetailOptionButtonSelected,
+                      isCorrectOption && styles.quizDetailOptionButtonCorrect,
+                      isWrongSelected && styles.quizDetailOptionButtonWrong,
+                    ]}>
+                    <Text
+                      style={[
+                        styles.quizDetailOptionText,
+                        isSelected && !quizResult && styles.quizDetailOptionTextSelected,
+                        isCorrectOption && styles.quizDetailOptionTextCorrect,
+                        isWrongSelected && styles.quizDetailOptionTextWrong,
+                      ]}>
+                      {option}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {quizResult ? (
+              <View style={styles.quizDetailExplanation}>
+                {currentAnswer === currentQuestion.correct_answer ? (
+                  <View style={styles.quizDetailExplanationHeader}>
+                    <MaterialIcons name="check-circle" size={20} color="#16A34A" />
+                    <Text style={styles.quizDetailExplanationCorrectText}>정답입니다</Text>
+                  </View>
+                ) : (
+                  <View style={styles.quizDetailExplanationHeader}>
+                    <MaterialIcons name="cancel" size={20} color="#DC2626" />
+                    <Text style={styles.quizDetailExplanationWrongText}>오답입니다</Text>
+                  </View>
+                )}
+                <Text style={styles.quizDetailExplanationBody}>
+                  <Text style={{ fontFamily: FontFamily.extraBold }}>정답: {currentQuestion.correct_answer}</Text>
+                  {'\n\n'}
+                  {currentQuestion.explanation || '저장된 해설이 없습니다.'}
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.quizDetailFooter}>
+              <View style={styles.quizDetailFooterBadge}>
+                <Text style={styles.quizDetailFooterBadgeText}>{answeredQuestionCount} / {questions.length} 응답</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {activeQuestionPage > 0 ? (
+                  <Pressable
+                    onPress={() => setActiveQuestionPage((page) => Math.max(0, page - 1))}
+                    style={styles.quizDetailFooterNavButton}>
+                    <Text style={styles.quizDetailFooterNavButtonText}>이전으로</Text>
+                  </Pressable>
+                ) : null}
+                
+                {activeQuestionPage < questions.length - 1 ? (
+                  <Pressable
+                    onPress={() => setActiveQuestionPage((page) => Math.min(questions.length - 1, page + 1))}
+                    style={styles.quizDetailFooterNavButton}>
+                    <Text style={styles.quizDetailFooterNavButtonText}>다음으로</Text>
+                    <MaterialIcons name="arrow-forward" size={18} color="#FFFFFF" />
+                  </Pressable>
+                ) : !quizResult ? (
+                  <Pressable
+                    disabled={!canSubmitQuiz}
+                    onPress={submitAnswers}
+                    style={[styles.quizDetailFooterNavButton, !canSubmitQuiz && { opacity: 0.5 }]}>
+                    {quizDetailStatus === 'submitting' ? (
+                      <ActivityIndicator color="#FFFFFF" size="small" />
+                    ) : (
+                      <Text style={styles.quizDetailFooterNavButtonText}>제출</Text>
+                    )}
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+          </View>
+        ) : (
+          <View style={styles.savedEmptyState}>
+            <MaterialIcons name="quiz" size={31} color="#A6ADB8" />
+            <Text style={styles.savedEmptyTitle}>퀴즈 정보가 없습니다.</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -4546,8 +5231,478 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: 'normal',
   },
-  placeholderPanel: {
+  savedPanel: {
+    alignSelf: 'center',
+    maxWidth: 980,
+    width: '100%',
+  },
+  savedPanelHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 18,
+    justifyContent: 'space-between',
+  },
+  savedPanelTitleGroup: {
+    flex: 1,
+  },
+  savedRefreshButton: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DDE3EC',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 42,
+    paddingHorizontal: 14,
+  },
+  savedRefreshButtonDisabled: {
+    opacity: 0.58,
+  },
+  savedRefreshText: {
+    color: '#303746',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 13,
+    fontWeight: 'normal',
+  },
+  savedErrorBanner: {
+    alignItems: 'center',
+    backgroundColor: '#FFF4F3',
+    borderColor: '#FAD7D3',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  savedErrorText: {
+    color: '#B42318',
+    flex: 1,
+    fontFamily: FontFamily.bold,
+    fontSize: 12,
+    fontWeight: 'normal',
+  },
+  savedFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 22,
+  },
+  savedFilterButton: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DDE3EC',
+    borderRadius: 15,
+    borderWidth: 1,
+    minHeight: 34,
+    paddingHorizontal: 13,
+  },
+  savedFilterButtonActive: {
+    backgroundColor: '#111318',
+    borderColor: '#111318',
+  },
+  savedFilterText: {
+    color: '#6B7280',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    lineHeight: 32,
+  },
+  savedFilterTextActive: {
+    color: '#FFFFFF',
+  },
+  savedSplitLayout: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 18,
+    marginTop: 18,
+    width: '100%',
+  },
+  savedListColumn: {
     gap: 10,
+    width: 310,
+  },
+  savedListItem: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7F0',
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 10,
+    padding: 13,
+  },
+  savedListItemActive: {
+    backgroundColor: '#F7FAFF',
+    borderColor: '#B9CCE8',
+  },
+  savedListItemHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  savedKindIcon: {
+    alignItems: 'center',
+    backgroundColor: '#EEF1F5',
+    borderRadius: 12,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  savedKindIconActive: {
+    backgroundColor: '#303746',
+  },
+  summaryKindIcon_material: {
+    backgroundColor: '#EEF4FF',
+  },
+  summaryKindIcon_recording: {
+    backgroundColor: '#EEF8F1',
+  },
+  summaryKindIcon_session: {
+    backgroundColor: '#F2F3F7',
+  },
+  summaryKindIcon_speaker: {
+    backgroundColor: '#FFF6E7',
+  },
+  savedListItemTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  savedListItemTitle: {
+    color: '#1D2330',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 14,
+    fontWeight: 'normal',
+  },
+  savedListItemMeta: {
+    color: '#8B93A1',
+    fontFamily: FontFamily.bold,
+    fontSize: 11,
+    fontWeight: 'normal',
+    marginTop: 3,
+  },
+  savedListItemPreview: {
+    color: '#596272',
+    fontFamily: FontFamily.bold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    lineHeight: 18,
+  },
+  savedDetailPane: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7F0',
+    borderRadius: 14,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 430,
+    padding: 20,
+  },
+  savedDetailHeader: {
+    alignItems: 'flex-start',
+    borderBottomColor: '#EEF2F7',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+    paddingBottom: 16,
+  },
+  savedDetailTitle: {
+    color: '#1D2330',
+    fontFamily: FontFamily.black,
+    fontSize: 21,
+    fontWeight: 'normal',
+    lineHeight: 27,
+  },
+  savedDetailMeta: {
+    color: '#8B93A1',
+    fontFamily: FontFamily.bold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    marginTop: 5,
+  },
+  savedDetailPill: {
+    alignItems: 'center',
+    backgroundColor: '#F1F4F8',
+    borderRadius: 14,
+    minHeight: 30,
+    paddingHorizontal: 11,
+  },
+  savedDetailPillText: {
+    color: '#596272',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    lineHeight: 30,
+  },
+  savedSummaryBody: {
+    gap: 13,
+    paddingTop: 18,
+  },
+  savedSummaryParagraph: {
+    color: '#222733',
+    fontFamily: FontFamily.bold,
+    fontSize: 15,
+    fontWeight: 'normal',
+    lineHeight: 25,
+  },
+  savedEmptyState: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7F0',
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 8,
+    justifyContent: 'center',
+    marginTop: 24,
+    minHeight: 260,
+    padding: 28,
+  },
+  savedEmptyTitle: {
+    color: '#303746',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 15,
+    fontWeight: 'normal',
+  },
+  savedEmptyText: {
+    color: '#8B93A1',
+    fontFamily: FontFamily.bold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  quizDetailTopBar: {
+    alignItems: 'center',
+    borderBottomColor: '#EEF2F7',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+    paddingBottom: 16,
+  },
+  quizScrollContainer: {
+    flexGrow: 1,
+    padding: 24,
+    paddingBottom: 60,
+  },
+  quizListContainer: {
+    gap: 16,
+    maxWidth: 800,
+    alignSelf: 'center',
+    width: '100%',
+  },
+  quizListCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+    gap: 16,
+    shadowColor: '#101828',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  quizListCardIcon: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    height: 48,
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quizListCardContent: {
+    flex: 1,
+    gap: 4,
+  },
+  quizListCardTitle: {
+    color: '#0F172A',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 16,
+    fontWeight: 'normal',
+  },
+  quizListCardMeta: {
+    color: '#64748B',
+    fontFamily: FontFamily.bold,
+    fontSize: 13,
+    fontWeight: 'normal',
+  },
+  quizListCardActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  quizListCardButton: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  quizListCardButtonText: {
+    color: '#334155',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 14,
+    fontWeight: 'normal',
+  },
+  quizDetailContainer: {
+    maxWidth: 800,
+    alignSelf: 'center',
+    width: '100%',
+    gap: 20,
+  },
+  quizDetailHeaderBox: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  quizDetailHeaderScore: {
+    color: '#166534',
+    fontFamily: FontFamily.black,
+    fontSize: 18,
+    fontWeight: 'normal',
+  },
+  quizDetailHeaderScoreSub: {
+    color: '#166534',
+    fontFamily: FontFamily.bold,
+    fontSize: 13,
+    fontWeight: 'normal',
+  },
+  quizDetailHeaderButton: {
+    backgroundColor: '#E2E8F0',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  quizDetailHeaderButtonText: {
+    color: '#334155',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 14,
+    fontWeight: 'normal',
+  },
+  quizDetailQuestionTitle: {
+    color: '#0F172A',
+    fontFamily: FontFamily.black,
+    fontSize: 16,
+    lineHeight: 26,
+    marginTop: 4,
+    fontWeight: 'normal',
+  },
+  quizDetailOptions: {
+    gap: 12,
+  },
+  quizDetailOptionButton: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  quizDetailOptionButtonSelected: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#94A3B8',
+    borderWidth: 2,
+  },
+  quizDetailOptionButtonCorrect: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#22C55E',
+    borderWidth: 1,
+  },
+  quizDetailOptionButtonWrong: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#EF4444',
+    borderWidth: 1,
+  },
+  quizDetailOptionText: {
+    color: '#0F172A',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: 'normal',
+  },
+  quizDetailOptionTextSelected: {
+    color: '#0F172A',
+  },
+  quizDetailOptionTextCorrect: {
+    color: '#166534',
+  },
+  quizDetailOptionTextWrong: {
+    color: '#991B1B',
+  },
+  quizDetailExplanation: {
+    marginTop: 20,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    paddingTop: 24,
+  },
+  quizDetailExplanationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  quizDetailExplanationCorrectText: {
+    color: '#16A34A',
+    fontFamily: FontFamily.black,
+    fontSize: 18,
+    fontWeight: 'normal',
+  },
+  quizDetailExplanationWrongText: {
+    color: '#DC2626',
+    fontFamily: FontFamily.black,
+    fontSize: 18,
+    fontWeight: 'normal',
+  },
+  quizDetailExplanationBody: {
+    color: '#334155',
+    fontFamily: FontFamily.medium,
+    fontSize: 15,
+    lineHeight: 24,
+    fontWeight: 'normal',
+  },
+  quizDetailFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 40,
+  },
+  quizDetailFooterBadge: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  quizDetailFooterBadgeText: {
+    color: '#334155',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 14,
+    fontWeight: 'normal',
+  },
+  quizDetailFooterNavButton: {
+    backgroundColor: '#64748B',
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  quizDetailFooterNavButtonText: {
+    color: '#FFFFFF',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 15,
+    fontWeight: 'normal',
   },
   aiPanel: {
     backgroundColor: '#FFFFFF',
