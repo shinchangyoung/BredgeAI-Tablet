@@ -18,6 +18,7 @@ import {
 
 import { FontFamily } from '@/constants/fonts';
 import CitationInlineText, {
+  findHighlightRanges,
   normalizeCitations,
   type NormalizedCitation,
 } from '@/components/workspace/CitationInlineText';
@@ -695,18 +696,11 @@ function buildHighlightParts(source: string, target: string) {
   const highlight = String(target || '').trim();
   if (!text || !highlight) return [{ isHighlighted: false, text }];
 
-  const directIndex = text.indexOf(highlight);
-  if (directIndex < 0) return [{ isHighlighted: false, text }];
-
-  const parts: Array<{ isHighlighted: boolean; text: string }> = [];
-  if (directIndex > 0) {
-    parts.push({ isHighlighted: false, text: text.slice(0, directIndex) });
-  }
-  parts.push({ isHighlighted: true, text: text.slice(directIndex, directIndex + highlight.length) });
-  if (directIndex + highlight.length < text.length) {
-    parts.push({ isHighlighted: false, text: text.slice(directIndex + highlight.length) });
-  }
-  return parts;
+  const ranges = findHighlightRanges(text, highlight);
+  return ranges.map((range) => ({
+    isHighlighted: range.isHighlighted,
+    text: text.slice(range.start, range.end),
+  }));
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -857,7 +851,7 @@ const styles = StyleSheet.create({
   webChatContent: {
     alignItems: 'center',
     minHeight: '100%',
-    paddingBottom: 220,
+    paddingBottom: 280,
     paddingHorizontal: 34,
     paddingTop: 64,
   },

@@ -1182,7 +1182,7 @@ function findDefaultFolderId(nodes: WorkspaceNode[]): string | null {
 }
 
 function isRealWorkspaceId(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  return Boolean(value) && value !== 'all' && value !== 'favorite';
 }
 
 function colorWithAlpha(color: string, alpha: number) {
@@ -1240,7 +1240,7 @@ const styles = StyleSheet.create({
   },
   sidebarInner: {
     flex: 1,
-    paddingTop: 98,
+    paddingTop: 28,
     paddingHorizontal: 18,
     paddingBottom: 28,
     gap: 8,

@@ -104,23 +104,179 @@ export function normalizeCitations(citations: Record<string, unknown>[] = []): N
   return normalized;
 }
 
-// ── Highlight Utilities ─────────────────────────────────────────────
+// ── Highlight Utilities (ported from web citationUtils.js) ──────────
 
-function findHighlightRanges(source: string, target: string): Array<{ start: number; end: number; isHighlighted: boolean }> {
-  if (!target || !source) return [{ start: 0, end: source.length, isHighlighted: false }];
+function normalizeHighlightWhitespace(value = ''): string {
+  return String(value).replace(/\s+/g, ' ').trim();
+}
 
-  const directIndex = source.indexOf(target);
-  if (directIndex >= 0) {
-    const parts: Array<{ start: number; end: number; isHighlighted: boolean }> = [];
-    if (directIndex > 0) parts.push({ start: 0, end: directIndex, isHighlighted: false });
-    parts.push({ start: directIndex, end: directIndex + target.length, isHighlighted: true });
-    if (directIndex + target.length < source.length) {
-      parts.push({ start: directIndex + target.length, end: source.length, isHighlighted: false });
+function normalizedIndexMap(value = ''): { text: string; map: number[] } {
+  let text = '';
+  const map: number[] = [];
+  let previousWasSpace = true;
+
+  Array.from(String(value)).forEach((char, index) => {
+    if (/\s/.test(char)) {
+      if (previousWasSpace) return;
+      text += ' ';
+      map.push(index);
+      previousWasSpace = true;
+      return;
     }
-    return parts;
+
+    text += char;
+    map.push(index);
+    previousWasSpace = false;
+  });
+
+  return { text: text.trim(), map };
+}
+
+function compactCitationText(value = ''): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function compactIndexMap(value = ''): { text: string; map: number[] } {
+  let text = '';
+  const map: number[] = [];
+
+  Array.from(String(value || '')).forEach((char, index) => {
+    if (!/[\p{L}\p{N}]/u.test(char)) return;
+    text += char.toLowerCase();
+    map.push(index);
+  });
+
+  return { text, map };
+}
+
+function findSingleHighlightRange(source: string, target: string): [number, number] | null {
+  if (!target) return null;
+
+  // Step 1: Direct exact match
+  const directIndex = source.indexOf(target);
+  if (directIndex >= 0) return [directIndex, directIndex + target.length];
+
+  // Step 2: Whitespace-normalized match
+  const normalized = normalizedIndexMap(source);
+  const normalizedTarget = normalizeHighlightWhitespace(target);
+  if (normalizedTarget.length >= 8) {
+    const normalizedIndex = normalized.text.indexOf(normalizedTarget);
+    if (normalizedIndex >= 0) {
+      const start = normalized.map[normalizedIndex];
+      const endMapIndex = normalizedIndex + normalizedTarget.length - 1;
+      const end = (normalized.map[endMapIndex] ?? start) + 1;
+      return [start, end];
+    }
   }
 
-  return [{ start: 0, end: source.length, isHighlighted: false }];
+  // Step 3: Compact match (strip all non-letter/non-number chars)
+  const compact = compactIndexMap(source);
+  const compactTarget = compactCitationText(target);
+  if (compactTarget.length >= 8) {
+    const compactIndex = compact.text.indexOf(compactTarget);
+    if (compactIndex >= 0) {
+      const start = compact.map[compactIndex];
+      const endMapIndex = compactIndex + compactTarget.length - 1;
+      const end = (compact.map[endMapIndex] ?? start) + 1;
+      return [start, end];
+    }
+  }
+
+  return null;
+}
+
+function expandRangeToSentence(source: string, range: [number, number]): [number, number] {
+  const text = String(source || '');
+  let [start, end] = range;
+  const sentenceBoundary = /[.!?。？！]|\n/;
+
+  while (start > 0 && !sentenceBoundary.test(text[start - 1])) {
+    start -= 1;
+  }
+  while (end < text.length && !sentenceBoundary.test(text[end])) {
+    end += 1;
+  }
+  if (end < text.length && sentenceBoundary.test(text[end])) {
+    end += 1;
+  }
+  return [start, end];
+}
+
+function splitCitationSentences(value = ''): string[] {
+  const cleaned = String(value || '')
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/\([^)]*출처[^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
+
+  const matches = cleaned.match(/[^.!?。？！]+(?:다\.|요\.|입니다\.|습니다\.|[.!?。？！])?/g) || [cleaned];
+  const seen = new Set<string>();
+  return matches
+    .map((item) => item.trim())
+    .filter((item) => normalizeHighlightWhitespace(item).length >= 8)
+    .filter((item) => {
+      const key = normalizeHighlightWhitespace(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function mergeHighlightRanges(ranges: Array<[number, number]>): Array<[number, number]> {
+  const sorted = ranges
+    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  sorted.forEach(([start, end]) => {
+    const last = merged[merged.length - 1];
+    if (!last || start > last[1]) {
+      merged.push([start, end]);
+      return;
+    }
+    last[1] = Math.max(last[1], end);
+  });
+  return merged;
+}
+
+function findAllHighlightRanges(source: string, target: string): Array<[number, number]> {
+  // Try full target match first
+  const primary = findSingleHighlightRange(source, target);
+  if (primary) return [expandRangeToSentence(source, primary)];
+
+  // Fall back to sentence-by-sentence matching
+  const sentences = splitCitationSentences(target);
+  const ranges: Array<[number, number]> = [];
+  sentences.forEach((sentence) => {
+    const range = findSingleHighlightRange(source, sentence);
+    if (range) ranges.push(expandRangeToSentence(source, range));
+  });
+
+  return mergeHighlightRanges(ranges);
+}
+
+export function findHighlightRanges(source: string, target: string): Array<{ start: number; end: number; isHighlighted: boolean }> {
+  if (!target || !source) return [{ start: 0, end: source.length, isHighlighted: false }];
+
+  const rawRanges = findAllHighlightRanges(source, target);
+  if (!rawRanges.length) return [{ start: 0, end: source.length, isHighlighted: false }];
+
+  const parts: Array<{ start: number; end: number; isHighlighted: boolean }> = [];
+  let cursor = 0;
+  rawRanges.forEach(([start, end]) => {
+    if (start < cursor) return;
+    if (start > cursor) {
+      parts.push({ start: cursor, end: start, isHighlighted: false });
+    }
+    parts.push({ start, end, isHighlighted: true });
+    cursor = end;
+  });
+  if (cursor < source.length) {
+    parts.push({ start: cursor, end: source.length, isHighlighted: false });
+  }
+  return parts;
 }
 
 const citationMarkerPattern = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
@@ -326,8 +482,13 @@ function CitationPopover({
   const iconColor = isTranscript ? '#D97706' : '#2563EB';
 
   const popoverWidth = Math.min(SCREEN_WIDTH * 0.85, 370);
+  const screenHeight = Dimensions.get('window').height;
+  const estimatedPopoverHeight = 300;
   const left = position ? Math.max(20, Math.min(position.x - popoverWidth / 2, SCREEN_WIDTH - popoverWidth - 20)) : 20;
-  const top = position ? position.y + 24 : 100;
+  const fitsBelow = position ? (position.y + 24 + estimatedPopoverHeight < screenHeight - 40) : true;
+  const top = position
+    ? (fitsBelow ? position.y + 24 : Math.max(40, position.y - estimatedPopoverHeight - 12))
+    : 100;
 
   return (
     <Modal
@@ -611,19 +772,11 @@ const styles = StyleSheet.create({
   markerWrap: {
   },
   markerBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#475569',
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    overflow: 'hidden',
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginLeft: 4,
-    textAlign: 'center',
-    lineHeight: 14,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563EB',
+    marginLeft: 2,
+    lineHeight: 26,
   },
 });
 

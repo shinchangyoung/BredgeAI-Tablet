@@ -154,6 +154,30 @@ export default function CalendarScreen() {
     }
   };
 
+  const openWorkspace = (item: ScheduleItem) => {
+    if (item.status === 'pending') {
+      updateScheduleStatus(item, 'confirmed');
+    }
+
+    if (item.workspaceFileId) {
+      router.push({
+        pathname: '/workspace',
+        params: {
+          sessionId: item.workspaceFileId,
+          citation: JSON.stringify({
+            session_id: item.workspaceFileId,
+            recording_id: item.recordingId,
+            transcript_id: item.transcriptId,
+            start_time: item.sourceStartTime,
+            end_time: item.sourceEndTime,
+            source_text: item.sourceText,
+            source_type: 'recording',
+          }),
+        },
+      });
+    }
+  };
+
   return (
     <SafeAreaView style={styles.root}>
       <View style={[styles.app, { gap: layout.shellGap }]}>
@@ -316,6 +340,7 @@ export default function CalendarScreen() {
                             item={item}
                             onConfirm={() => updateScheduleStatus(item, 'confirmed')}
                             onIgnore={() => updateScheduleStatus(item, 'ignored')}
+                            onOpenWorkspace={() => openWorkspace(item)}
                           />
                         ))}
                       </View>
@@ -455,10 +480,12 @@ function ScheduleRow({
   item,
   onConfirm,
   onIgnore,
+  onOpenWorkspace,
 }: {
   item: ScheduleItem;
   onConfirm: () => void;
   onIgnore: () => void;
+  onOpenWorkspace?: () => void;
 }) {
   const isPending = item.status === 'pending';
   const icon = getScheduleTypeIcon(item.type) as keyof typeof MaterialIcons.glyphMap;
@@ -489,6 +516,14 @@ function ScheduleRow({
           </Pressable>
           <Pressable onPress={onIgnore} style={styles.ghostButton}>
             <Text style={styles.ghostButtonText}>무시</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {item.workspaceFileId ? (
+        <View style={[styles.scheduleActions, isPending ? { marginTop: 8 } : undefined]}>
+          <Pressable onPress={onOpenWorkspace} style={styles.workspaceButton}>
+            <Text style={styles.workspaceButtonText}>워크스페이스 열기</Text>
           </Pressable>
         </View>
       ) : null}
@@ -568,6 +603,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   confirmButtonText: {
+    color: '#FFFFFF',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 13,
+    fontWeight: 'normal',
+  },
+  workspaceButton: {
+    alignItems: 'center',
+    backgroundColor: '#111318',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    alignSelf: 'flex-start',
+  },
+  workspaceButtonText: {
     color: '#FFFFFF',
     fontFamily: FontFamily.extraBold,
     fontSize: 13,

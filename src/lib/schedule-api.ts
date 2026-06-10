@@ -14,6 +14,8 @@ export type ScheduleItem = {
   recordingId: string;
   sourceSessionTitle: string;
   sourceText: string;
+  sourceStartTime: number | null;
+  sourceEndTime: number | null;
   startTime: string;
   status: ScheduleStatus;
   time: string;
@@ -141,6 +143,8 @@ function normalizeScheduleItem(item: RawSchedule): ScheduleItem {
     recordingId: readString(item, 'recording_id'),
     sourceSessionTitle: readString(item, 'session_title') || readString(item, 'course_title'),
     sourceText,
+    sourceStartTime: readNumber(item, 'source_start_time'),
+    sourceEndTime: readNumber(item, 'source_end_time'),
     startTime,
     status: normalizeStatus(item.status, origin),
     time: startTime,

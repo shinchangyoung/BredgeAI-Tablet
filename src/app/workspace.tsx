@@ -1704,6 +1704,7 @@ export default function WorkspaceScreen() {
     handleSourceView(parsed);
   }, [citationParam, handleSourceView, workspaceSession]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleTranscriptWordPress = useCallback(async (word: string, context: string) => {
     const cleanWord = cleanSelectedWord(word);
     if (!cleanWord) return;
@@ -1994,6 +1995,26 @@ export default function WorkspaceScreen() {
                 <ActivityIndicator color="#1D1D1F" />
                 <Text style={styles.emptyScriptText}>세션 데이터를 불러오는 중...</Text>
               </View>
+            ) : isRecording ? (
+              <Pressable
+                disabled={isRecordingSubmitting}
+                onPress={stopWorkspaceRecording}
+                style={styles.emptyScriptState}
+              >
+                <LottieView
+                  autoPlay
+                  loop
+                  resizeMode="contain"
+                  source={require('@/app/animation/Animation - 1707645432158.json')}
+                  style={[
+                    styles.emptyTranscriptAnimation,
+                    { height: emptyAnimationHeight, width: emptyAnimationWidth },
+                  ]}
+                />
+                <Text style={styles.emptyScriptText}>
+                  {isRecordingSubmitting ? '녹음을 저장하고 있습니다...' : '녹음 중... (탭하여 종료)'}
+                </Text>
+              </Pressable>
             ) : isSelectedRecordingTranscribing ? (
               <View style={styles.transcriptionPreparingState}>
                 <LottieView
@@ -2044,7 +2065,6 @@ export default function WorkspaceScreen() {
                               token.isWord ? (
                                 <Text
                                   key={token.id}
-                                  onPress={() => handleTranscriptWordPress(token.value, line.text)}
                                   style={[styles.transcriptWordText, isActiveLine && styles.transcriptWordTextActive]}
                                   suppressHighlighting>
                                   {token.value}
@@ -2345,7 +2365,7 @@ export default function WorkspaceScreen() {
                     ref={chatScrollRef}
                     onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
                     style={{ flex: 1 }}
-                    contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16, gap: 20, paddingBottom: 24 }}
+                    contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16, gap: 20, paddingBottom: 100 }}
                     showsVerticalScrollIndicator={false}
                   >
                     {messages.map((msg, index) => (
@@ -3209,6 +3229,7 @@ type QuizResultState = {
   totalQuestions: number;
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const summaryFilterOptions: { key: SummaryFilterKey; label: string }[] = [
   { key: 'all', label: '전체' },
   { key: 'recording', label: '전사' },
@@ -3230,6 +3251,7 @@ function formatSavedDate(value?: string | null) {
   });
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function getTextPreview(text: string, limit = 96) {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return normalized.length > limit ? `${normalized.slice(0, limit).trim()}...` : normalized;
@@ -3253,6 +3275,7 @@ function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
   const [summaryItems, setSummaryItems] = useState<SavedSummaryItem[]>([]);
   const [summaryStatus, setSummaryStatus] = useState<SavedPanelStatus>('idle');
   const [summaryError, setSummaryError] = useState('');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [summaryFilter, setSummaryFilter] = useState<SummaryFilterKey>('all');
   const [selectedSummaryId, setSelectedSummaryId] = useState('');
 
@@ -3285,6 +3308,7 @@ function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
     loadSummaries();
   }, [loadSummaries]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const summaryCounts = useMemo(() => {
     const counts: Record<SummaryFilterKey, number> = {
       all: summaryItems.length,
@@ -3306,6 +3330,7 @@ function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
     [summaryFilter, summaryItems],
   );
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const selectedSummary = useMemo(() => {
     if (!filteredSummaryItems.length) return null;
     return (
@@ -3321,18 +3346,6 @@ function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
           <Text style={styles.contentTitle}>요약</Text>
           <Text style={styles.contentSubtitle}>{sessionTitle}</Text>
         </View>
-
-        <Pressable
-          disabled={summaryStatus === 'loading'}
-          onPress={loadSummaries}
-          style={[styles.savedRefreshButton, summaryStatus === 'loading' && styles.savedRefreshButtonDisabled]}>
-          {summaryStatus === 'loading' ? (
-            <ActivityIndicator color="#636A78" size="small" />
-          ) : (
-            <MaterialIcons name="refresh" size={20} color="#303746" />
-          )}
-          <Text style={styles.savedRefreshText}>새로고침</Text>
-        </Pressable>
       </View>
 
       {summaryError ? (
@@ -3342,109 +3355,101 @@ function SummaryPanel({ sessionId, sessionTitle }: SummaryPanelProps) {
         </View>
       ) : null}
 
-      <View style={styles.savedFilterRow}>
-        {summaryFilterOptions.map((option) => {
-          const isActive = summaryFilter === option.key;
-          const count = summaryCounts[option.key];
-
-          return (
-            <Pressable
-              key={option.key}
-              onPress={() => {
-                setSummaryFilter(option.key);
-                const nextItem = summaryItems.find((item) => option.key === 'all' || item.kind === option.key);
-                setSelectedSummaryId(nextItem?.id ?? '');
-              }}
-              style={[styles.savedFilterButton, isActive && styles.savedFilterButtonActive]}>
-              <Text style={[styles.savedFilterText, isActive && styles.savedFilterTextActive]}>
-                {option.label} {count}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
       {summaryStatus === 'loading' && !summaryItems.length ? (
         <View style={styles.savedEmptyState}>
           <ActivityIndicator color="#8E929A" size="small" />
           <Text style={styles.savedEmptyTitle}>저장된 요약을 불러오는 중입니다.</Text>
         </View>
       ) : filteredSummaryItems.length ? (
-        <View style={styles.savedSplitLayout}>
-          <View style={styles.savedListColumn}>
-            {filteredSummaryItems.map((item) => {
-              const isActive = selectedSummary?.id === item.id;
-              const kindIconStyle =
-                item.kind === 'material'
-                  ? styles.summaryKindIcon_material
-                  : item.kind === 'speaker'
-                    ? styles.summaryKindIcon_speaker
-                    : item.kind === 'recording'
-                      ? styles.summaryKindIcon_recording
-                      : styles.summaryKindIcon_session;
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          style={styles.summaryScrollContainer}
+          contentContainerStyle={styles.summaryListContainer}
+        >
+          {filteredSummaryItems.map((item) => {
+            const kindIconStyle =
+              item.kind === 'material'
+                ? styles.summaryKindIcon_material
+                : item.kind === 'speaker'
+                  ? styles.summaryKindIcon_speaker
+                  : item.kind === 'recording'
+                    ? styles.summaryKindIcon_recording
+                    : styles.summaryKindIcon_session;
 
-              return (
-                <Pressable
-                  key={item.id}
-                  onPress={() => setSelectedSummaryId(item.id)}
-                  style={[styles.savedListItem, isActive && styles.savedListItemActive]}>
-                  <View style={styles.savedListItemHeader}>
-                    <View style={[styles.savedKindIcon, kindIconStyle, isActive && styles.savedKindIconActive]}>
+            return (
+              <View key={item.id} style={styles.summaryCard}>
+                <View style={styles.summaryCardHeader}>
+                  <View style={styles.summaryCardHeaderLeft}>
+                    <View style={[styles.savedKindIcon, kindIconStyle]}>
                       <MaterialIcons
                         name={item.kind === 'material' ? 'picture-as-pdf' : item.kind === 'speaker' ? 'record-voice-over' : 'article'}
                         size={17}
-                        color={isActive ? '#FFFFFF' : '#5B6472'}
+                        color="#5B6472"
                       />
                     </View>
-                    <View style={styles.savedListItemTitleBlock}>
-                      <Text numberOfLines={1} style={styles.savedListItemTitle}>{item.title}</Text>
-                      <Text numberOfLines={1} style={styles.savedListItemMeta}>
+                    <View style={styles.summaryCardTitleBlock}>
+                      <Text style={styles.summaryCardTitle}>{item.title}</Text>
+                      <Text style={styles.summaryCardMeta}>
                         {item.subtitle} · {formatSavedDate(item.createdAt)}
                       </Text>
                     </View>
                   </View>
-                  <Text numberOfLines={2} style={styles.savedListItemPreview}>
-                    {getTextPreview(item.summary)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <View style={styles.savedDetailPane}>
-            {selectedSummary ? (
-              <>
-                <View style={styles.savedDetailHeader}>
-                  <View>
-                    <Text style={styles.savedDetailTitle}>{selectedSummary.title}</Text>
-                    <Text style={styles.savedDetailMeta}>
-                      {selectedSummary.subtitle} · {formatSavedDate(selectedSummary.createdAt)}
-                    </Text>
-                  </View>
                   <View style={styles.savedDetailPill}>
                     <Text style={styles.savedDetailPillText}>
-                      {selectedSummary.kind === 'material'
+                      {item.kind === 'material'
                         ? 'PDF'
-                        : selectedSummary.kind === 'speaker'
+                        : item.kind === 'speaker'
                           ? '화자'
-                          : selectedSummary.kind === 'recording'
+                          : item.kind === 'recording'
                             ? '전사'
                             : '세션'}
                     </Text>
                   </View>
                 </View>
 
-                <View style={styles.savedSummaryBody}>
-                  {splitReadableParagraphs(selectedSummary.summary).map((paragraph, index) => (
-                    <Text key={`${selectedSummary.id}-paragraph-${index}`} style={styles.savedSummaryParagraph}>
-                      {paragraph}
-                    </Text>
-                  ))}
+                <View style={styles.summaryCardBody}>
+                  {splitReadableParagraphs(item.summary).map((paragraph, index) => {
+                    const isHeader = paragraph.startsWith('##');
+                    const cleanText = isHeader ? paragraph.replace(/^##\s*/, '') : paragraph;
+                    
+                    const result: React.ReactNode[] = [];
+                    const regex = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
+                    let lastIndex = 0;
+                    let match: RegExpExecArray | null;
+                    
+                    while ((match = regex.exec(cleanText)) !== null) {
+                      if (match.index > lastIndex) {
+                        result.push(cleanText.substring(lastIndex, match.index));
+                      }
+                      const numbers = match[1].split(',').map((n) => n.trim());
+                      numbers.forEach((num, i) => {
+                        result.push(
+                          <Text key={`badge-${match.index}-${i}`} style={styles.summaryBadgeText}>
+                            {num}
+                          </Text>
+                        );
+                      });
+                      lastIndex = regex.lastIndex;
+                    }
+                    
+                    if (lastIndex < cleanText.length) {
+                      result.push(cleanText.substring(lastIndex));
+                    }
+
+                    return (
+                      <Text
+                        key={`${item.id}-paragraph-${index}`}
+                        style={isHeader ? styles.savedSummaryHeaderParagraph : styles.savedSummaryParagraph}
+                      >
+                        {result}
+                      </Text>
+                    );
+                  })}
                 </View>
-              </>
-            ) : null}
-          </View>
-        </View>
+              </View>
+            );
+          })}
+        </ScrollView>
       ) : (
         <View style={styles.savedEmptyState}>
           <MaterialIcons name="article" size={31} color="#A6ADB8" />
@@ -5388,6 +5393,58 @@ const styles = StyleSheet.create({
     fontWeight: 'normal',
     lineHeight: 18,
   },
+  summaryScrollContainer: {
+    flex: 1,
+    width: '100%',
+    marginTop: 18,
+  },
+  summaryListContainer: {
+    gap: 18,
+    paddingBottom: 32,
+  },
+  summaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E1E7F0',
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 20,
+    width: '100%',
+  },
+  summaryCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderBottomColor: '#EEF2F7',
+    borderBottomWidth: 1,
+    paddingBottom: 16,
+  },
+  summaryCardHeaderLeft: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryCardTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryCardTitle: {
+    color: '#1D2330',
+    fontFamily: FontFamily.extraBold,
+    fontSize: 16,
+    fontWeight: 'normal',
+  },
+  summaryCardMeta: {
+    color: '#8B93A1',
+    fontFamily: FontFamily.bold,
+    fontSize: 12,
+    fontWeight: 'normal',
+    marginTop: 3,
+  },
+  summaryCardBody: {
+    marginTop: 18,
+  },
   savedDetailPane: {
     backgroundColor: '#FFFFFF',
     borderColor: '#E1E7F0',
@@ -5440,10 +5497,26 @@ const styles = StyleSheet.create({
   },
   savedSummaryParagraph: {
     color: '#222733',
-    fontFamily: FontFamily.bold,
+    fontFamily: FontFamily.medium,
     fontSize: 15,
     fontWeight: 'normal',
     lineHeight: 25,
+  },
+  summaryBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563EB',
+    marginHorizontal: 2,
+    lineHeight: 25,
+  },
+  savedSummaryHeaderParagraph: {
+    color: '#1D2330',
+    fontFamily: FontFamily.black,
+    fontSize: 18,
+    fontWeight: 'normal',
+    lineHeight: 28,
+    marginTop: 14,
+    marginBottom: 6,
   },
   savedEmptyState: {
     alignItems: 'center',
