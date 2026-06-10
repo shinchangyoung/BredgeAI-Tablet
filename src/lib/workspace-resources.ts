@@ -61,6 +61,7 @@ export type TranscriptLine = {
   recordingId: string;
   speaker?: string;
   startSeconds?: number;
+  endSeconds?: number;
   text: string;
   time: string;
 };
@@ -435,6 +436,10 @@ export function buildTranscriptLines(recordings: WorkspaceRecordingResource[]) {
             getNumberValue(segment, ['start', 'startTime', 'startSeconds']) ??
             getNumberValue(transcription, ['start', 'startTime', 'startSeconds']);
 
+          const endSeconds =
+            getNumberValue(segment, ['end', 'endTime', 'endSeconds']) ??
+            getNumberValue(transcription, ['end', 'endTime', 'endSeconds']);
+
           lines.push({
             id: `${recordingId}-${transcriptionIndex}-${segmentIndex}`,
             recordingId,
@@ -442,6 +447,7 @@ export function buildTranscriptLines(recordings: WorkspaceRecordingResource[]) {
               getStringValue(segment, ['speakerName', 'speaker']) ??
               getStringValue(transcription, ['speakerName', 'speaker']),
             startSeconds: typeof startSeconds === 'number' ? Math.max(0, startSeconds) : undefined,
+            endSeconds: typeof endSeconds === 'number' ? Math.max(0, endSeconds) : undefined,
             text,
             time: formatTranscriptTime(segment, transcription),
           });
@@ -461,6 +467,10 @@ export function buildTranscriptLines(recordings: WorkspaceRecordingResource[]) {
           startSeconds: (() => {
             const startSeconds = getNumberValue(transcription, ['start', 'startTime', 'startSeconds']);
             return typeof startSeconds === 'number' ? Math.max(0, startSeconds) : undefined;
+          })(),
+          endSeconds: (() => {
+            const endSeconds = getNumberValue(transcription, ['end', 'endTime', 'endSeconds']);
+            return typeof endSeconds === 'number' ? Math.max(0, endSeconds) : undefined;
           })(),
           text,
           time: formatTranscriptTime(transcription),

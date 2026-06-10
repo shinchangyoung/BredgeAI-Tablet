@@ -76,6 +76,8 @@ import {
   type QuizQuestion,
   type SavedQuiz,
 } from '@/lib/quiz-api';
+import { createManualSchedule } from '@/lib/schedule-api';
+import { ScheduleCreateModal, type ScheduleModalData } from '@/components/workspace/ScheduleCreateModal';
 import {
   appendMaterialToSessionWeeks,
   buildSessionSourceGroups,
@@ -484,6 +486,8 @@ export default function WorkspaceScreen() {
   const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
   const [selectedTranscriptLineId, setSelectedTranscriptLineId] = useState<string | null>(null);
   const [playbackRecordingId, setPlaybackRecordingId] = useState<string | null>(null);
+  const [isScheduleModalVisible, setIsScheduleModalVisible] = useState(false);
+  const [selectedLineForSchedule, setSelectedLineForSchedule] = useState<ScheduleModalData | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(() => new Set());
   const [transcribingRecordingId, setTranscribingRecordingId] = useState<string | null>(null);
@@ -1144,6 +1148,28 @@ export default function WorkspaceScreen() {
       recording: selectedTranscriptRecording,
       recordingId: line.recordingId,
     });
+  };
+
+  const openScheduleModal = (line: TranscriptLine) => {
+    if (!sessionId) return;
+    setSelectedLineForSchedule({
+      sessionId: sessionId as string,
+      recordingId: line.recordingId,
+      sourceStartTime: line.startSeconds ?? null,
+      sourceEndTime: line.endSeconds ?? null,
+      sourceText: line.text,
+    });
+    setIsScheduleModalVisible(true);
+  };
+
+  const handleManualScheduleSave = async (data: any) => {
+    try {
+      await createManualSchedule(data);
+      setIsScheduleModalVisible(false);
+      Alert.alert('일정 추가 완료', '캘린더에 수동 일정이 저장되었습니다.');
+    } catch (err: any) {
+      Alert.alert('일정 추가 실패', err.message || '알 수 없는 오류가 발생했습니다.');
+    }
   };
 
   const startRecordingTranscription = async (recordingId?: string | null) => {
@@ -2049,13 +2075,20 @@ export default function WorkspaceScreen() {
 
                   return (
                     <View style={styles.transcriptItem}>
-                      <Pressable
-                        onPress={() => handleTranscriptLinePress(line)}
-                        style={styles.transcriptTimeButton}>
-                        <Text style={[styles.transcriptTime, isActiveLine && styles.transcriptTimeActive]}>
-                          {line.time}
-                        </Text>
-                      </Pressable>
+                      <View style={styles.transcriptHeaderRow}>
+                        <Pressable
+                          onPress={() => handleTranscriptLinePress(line)}
+                          style={styles.transcriptTimeButton}>
+                          <Text style={[styles.transcriptTime, isActiveLine && styles.transcriptTimeActive]}>
+                            {line.time}
+                          </Text>
+                        </Pressable>
+                        <Pressable 
+                          onPress={() => openScheduleModal(line)}
+                          style={styles.transcriptScheduleAddButton}>
+                          <MaterialIcons name="edit-calendar" size={14} color="#A1A1AA" />
+                        </Pressable>
+                      </View>
                       <Pressable
                         onPress={() => handleTranscriptLinePress(line)}
                         style={styles.transcriptBubble}>
@@ -2197,12 +2230,18 @@ export default function WorkspaceScreen() {
             </View>
 
             {activeTab === 'materials' && currentPdf ? (
-              <View style={styles.pdfContentContainer}>{materialsPanel}</View>
+              <View style={styles.pdfContentContainer}>
+                {materialsPanel}
+              </View>
             ) : (
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.contentScroll}>
-                {activeTab === 'materials' && materialsPanel}
+                {activeTab === 'materials' && (
+                  <>
+                    {materialsPanel}
+                  </>
+                )}
                 {activeTab === 'summary' && (
                   <SummaryPanel sessionId={sessionId ?? ''} sessionTitle={sessionTitle} />
                 )}
@@ -2211,6 +2250,16 @@ export default function WorkspaceScreen() {
                 )}
               </ScrollView>
             )}
+
+            {isScheduleModalVisible && (
+              <ScheduleCreateModal
+                visible={isScheduleModalVisible}
+                onClose={() => setIsScheduleModalVisible(false)}
+                onSave={handleManualScheduleSave}
+                initialData={selectedLineForSchedule}
+              />
+            )}
+
 
             {activeTab === 'materials' && currentPdf ? (
               <View style={styles.pageFloatingControls}>
@@ -2432,6 +2481,8 @@ export default function WorkspaceScreen() {
           </View>
         )}
       </View>
+
+
     </SafeAreaView>
   );
 }
@@ -3905,6 +3956,11 @@ function normalizeDrawTool(tool: DrawTool, strokeWidths: StrokeWidths): DrawTool
 }
 
 const styles = StyleSheet.create({
+  inlineScheduleContainer: {
+    paddingHorizontal: 16,
+    width: '100%',
+    paddingBottom: 24,
+  },
   root: {
     flex: 1,
     backgroundColor: '#050506',
@@ -4156,6 +4212,16 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 0,
     width: '100%',
+  },
+  transcriptHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  transcriptScheduleAddButton: {
+    padding: 4,
+    borderRadius: 6,
+    backgroundColor: '#F4F4F5',
   },
   transcriptTimeButton: {
     alignItems: 'flex-start',

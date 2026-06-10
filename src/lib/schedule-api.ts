@@ -25,6 +25,20 @@ export type ScheduleItem = {
   workspaceFileId: string;
 };
 
+export type ManualScheduleInput = {
+  title: string;
+  description?: string;
+  event_type?: ScheduleType;
+  due_date?: string;
+  status?: ScheduleStatus;
+  session_id?: string;
+  recording_id?: string;
+  transcript_id?: string;
+  source_start_time?: number;
+  source_end_time?: number;
+  source_text?: string;
+};
+
 type RawSchedule = Record<string, unknown>;
 
 const TYPE_LABELS: Record<ScheduleType, string> = {
@@ -191,6 +205,17 @@ export async function confirmSchedule(scheduleId: string) {
 
 export async function ignoreSchedule(scheduleId: string) {
   await requestScheduleJson(`/${encodeURIComponent(scheduleId)}/ignore`, { method: 'PUT' });
+}
+
+export async function createManualSchedule(input: ManualScheduleInput) {
+  const data = await requestScheduleJson('/manual', {
+    method: 'POST',
+    body: JSON.stringify({
+      ...input,
+      status: input.status || 'confirmed',
+    }),
+  });
+  return normalizeScheduleItem(data as RawSchedule);
 }
 
 export function getScheduleTypeLabel(type: ScheduleType) {
