@@ -7,7 +7,7 @@ import AppTabs from '@/components/app-tabs';
 import { defaultTextStyle } from '@/constants/fonts';
 
 let didConfigureDefaultFonts = false;
-
+//폰트 설정
 function configureDefaultFonts() {
   if (didConfigureDefaultFonts) return;
 
